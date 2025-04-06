@@ -16,7 +16,8 @@ const PatientControlPanel = ({
   onOpenScenarios,
   onApplyMedication,
   onPerformIntervention,
-  isOperating = true
+  isOperating = true,
+  isCPRInProgress = false 
 }) => {
   // Состояние для отслеживания активной вкладки
   const [activeTab, setActiveTab] = useState('vitals');

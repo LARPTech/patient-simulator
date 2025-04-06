@@ -9,26 +9,7 @@ import EducationalModule from './EducationalModule/EducationalModule';
 import PatientControlPanel from './ControlPanel/PatientControlPanel';
 
 // Импортируем основные модули
-import PhysiologicalModel from '../core/PhysiologicalModel';
-import EventsAndComplicationsModule from '../core/EventsAndComplicationsModule';
 import SimulationEngine from '../core/SimulationEngine';
-
-// Компонент вкладки 
-const TabButton = ({ label, isActive, onClick, icon }) => {
-  return (
-    <button
-      className={`flex items-center px-4 py-2 rounded-t-lg border-t border-l border-r ${
-        isActive 
-          ? 'bg-gray-800 border-blue-600 text-blue-400 border-b-0' 
-          : 'bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200'
-      }`}
-      onClick={onClick}
-    >
-      {icon && <span className="mr-2">{icon}</span>}
-      {label}
-    </button>
-  );
-};
 
 // Компонент для записей пациента
 const PatientRecords = ({ patientInfo, isOperating }) => {
@@ -131,7 +112,7 @@ const PatientRecords = ({ patientInfo, isOperating }) => {
   const [activeRecordTab, setActiveRecordTab] = useState('notes');
 
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4">
+    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 h-full overflow-auto">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl text-white font-bold">Медицинские записи</h2>
         {isOperating && (
@@ -168,7 +149,7 @@ const PatientRecords = ({ patientInfo, isOperating }) => {
 
       {/* Содержимое вкладок */}
       {activeRecordTab === 'notes' && (
-        <div className="space-y-4 max-h-[60vh] overflow-y-auto">
+        <div className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto">
           {medicalRecords.map((record, index) => (
             <div key={index} className="bg-gray-800 border border-gray-700 rounded p-3">
               <div className="flex justify-between items-start mb-2">
@@ -326,6 +307,8 @@ const IntegratedPatientSimulator = () => {
   const [showPatientControl, setShowPatientControl] = useState(false);
   const [isCPRInProgress, setIsCPRInProgress] = useState(false);
   const [showEducationalModule, setShowEducationalModule] = useState(false);
+  const [simulationError, setSimulationError] = useState(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   
   // Состояние пациента
   const [patientState, setPatientState] = useState({
@@ -355,6 +338,7 @@ const IntegratedPatientSimulator = () => {
   
   // Ссылка на модель физиологии
   const physiologicalModelRef = useRef(null);
+  const appRef = useRef(null);
   
   // Дата и время
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
@@ -380,16 +364,27 @@ const IntegratedPatientSimulator = () => {
   
   // Эффект для инициализации физиологической модели
   useEffect(() => {
-  
-   physiologicalModelRef.current = new PhysiologicalModel(patientState);
+    try {
+      const engine = new SimulationEngine(patientState, {
+        updateInterval: 1000,
+        eventCheckInterval: 10000
+      });
+      
+      physiologicalModelRef.current = engine.initialize ? engine.initialize() : engine;
+      
+      console.log("SimulationEngine initialized successfully");
+    } catch (error) {
+      console.error("Error initializing SimulationEngine:", error);
+      setSimulationError("Ошибка инициализации модели: " + error.message);
+    }
     
-    
-    physiologicalModelRef.current = simulatePhysiologicalModel;
-    
-    // Очистка при размонтировании
     return () => {
-      if (physiologicalModelRef.current) {
-        physiologicalModelRef.current.stopSimulation();
+      try {
+        if (physiologicalModelRef.current && typeof physiologicalModelRef.current.stopSimulation === 'function') {
+          physiologicalModelRef.current.stopSimulation();
+        }
+      } catch (error) {
+        console.error("Error cleaning up SimulationEngine:", error);
       }
     };
   }, []);
@@ -399,74 +394,165 @@ const IntegratedPatientSimulator = () => {
     let simulationInterval;
     
     if (isOperating && physiologicalModelRef.current) {
-      // Запускаем симуляцию физиологии
-      physiologicalModelRef.current.startSimulation();
-      
-      // Начальное состояние
-      updatePatientState(patientState);
-      
-      // Регулярное обновление состояния
-      simulationInterval = setInterval(() => {
-        if (physiologicalModelRef.current) {
-          const newState = physiologicalModelRef.current.updatePhysiology();
-          setPatientState(newState);
+      try {
+        if (typeof physiologicalModelRef.current.startSimulation === 'function') {
+          physiologicalModelRef.current.startSimulation();
+        } else {
+          console.warn("startSimulation method not found on physiologicalModel");
         }
-      }, 2000);
+        
+        updatePatientState(patientState);
+        
+        simulationInterval = setInterval(() => {
+          try {
+            if (physiologicalModelRef.current && typeof physiologicalModelRef.current.updatePhysiology === 'function') {
+              const newState = physiologicalModelRef.current.updatePhysiology();
+              if (newState) {
+                setPatientState(newState);
+              }
+            }
+          } catch (error) {
+            console.error("Error in simulation interval:", error);
+            clearInterval(simulationInterval);
+            setSimulationError("Ошибка в процессе симуляции: " + error.message);
+          }
+        }, 2000);
+      } catch (error) {
+        console.error("Error starting simulation:", error);
+        setSimulationError("Ошибка запуска симуляции: " + error.message);
+      }
     } else if (physiologicalModelRef.current) {
-      // Останавливаем симуляцию
-      physiologicalModelRef.current.stopSimulation();
-      
-      // Сбрасываем показатели
-      setPatientState({
-        hr: 72,
-        rr: 14,
-        spo2: 98,
-        systolic: 120,
-        diastolic: 80,
-        temperature: 36.6,
-        etco2: 35,
-        cardiac_output: 5.1,
-        stroke_volume: 70,
-        intubated: false
-      });
-      
-      // Сбрасываем статус СЛР
-      setIsCPRInProgress(false);
+      try {
+        if (typeof physiologicalModelRef.current.stopSimulation === 'function') {
+          physiologicalModelRef.current.stopSimulation();
+        }
+        
+        setPatientState({
+          hr: 72,
+          rr: 14,
+          spo2: 98,
+          systolic: 120,
+          diastolic: 80,
+          temperature: 36.6,
+          etco2: 35,
+          cardiac_output: 5.1,
+          stroke_volume: 70,
+          intubated: false
+        });
+        
+        setIsCPRInProgress(false);
+      } catch (error) {
+        console.error("Error stopping simulation:", error);
+      }
     }
     
-    return () => clearInterval(simulationInterval);
-  }, [isOperating]);
+    return () => {
+      if (simulationInterval) {
+        clearInterval(simulationInterval);
+      }
+    };
+  }, [isOperating, patientState]);
+
+  // Функция для управления полноэкранным режимом
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      if (appRef.current.requestFullscreen) {
+        appRef.current.requestFullscreen().then(() => {
+          setIsFullscreen(true);
+        }).catch(err => {
+          console.error(`Ошибка при переходе в полноэкранный режим: ${err.message}`);
+        });
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().then(() => {
+          setIsFullscreen(false);
+        }).catch(err => {
+          console.error(`Ошибка при выходе из полноэкранного режима: ${err.message}`);
+        });
+      }
+    }
+  };
+
+  // Слушатель события изменения полноэкранного режима
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Обработчик нажатия клавиши ESC для выхода из полноэкранного режима
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isFullscreen]);
   
   // Обработчик обновления состояния пациента
   const updatePatientState = (newState) => {
     setPatientState(newState);
     
-    if (physiologicalModelRef.current) {
-      physiologicalModelRef.current.setState(newState);
+    try {
+      if (physiologicalModelRef.current && typeof physiologicalModelRef.current.setState === 'function') {
+        physiologicalModelRef.current.setState(newState);
+      }
+    } catch (error) {
+      console.error("Error updating patient state:", error);
     }
   };
   
   // Обработчик запуска клинического сценария
   const handleStartScenario = (scenarioKey, parameters) => {
-    if (physiologicalModelRef.current && isOperating) {
-      const updatedState = physiologicalModelRef.current.applyScenario(scenarioKey, parameters);
-      setPatientState(updatedState);
-      
-      // Если запущен сценарий остановки сердца, автоматически запускаем СЛР
-      if (scenarioKey === 'cardiac_arrest') {
-        setIsCPRInProgress(true);
+    if (!physiologicalModelRef.current || !isOperating) return;
+    
+    try {
+      if (typeof physiologicalModelRef.current.applyScenario === 'function') {
+        const updatedState = physiologicalModelRef.current.applyScenario(scenarioKey, parameters);
+        if (updatedState) {
+          setPatientState(updatedState);
+        }
+        
+        if (scenarioKey === 'cardiac_arrest') {
+          setIsCPRInProgress(true);
+        }
+      } else {
+        console.warn("applyScenario method not found on physiologicalModel");
       }
       
-      // Скрываем панель сценариев
       setShowScenarios(false);
+    } catch (error) {
+      console.error("Error starting scenario:", error);
+      setSimulationError("Ошибка запуска сценария: " + error.message);
     }
   };
   
   // Обработчик применения лекарства
   const handleApplyMedication = (medication) => {
-    if (physiologicalModelRef.current && isOperating) {
-      const updatedState = physiologicalModelRef.current.applyMedication(medication);
-      setPatientState(updatedState);
+    if (!physiologicalModelRef.current || !isOperating) return;
+    
+    try {
+      if (typeof physiologicalModelRef.current.applyMedication === 'function') {
+        const updatedState = physiologicalModelRef.current.applyMedication(medication);
+        if (updatedState) {
+          setPatientState(updatedState);
+        }
+      } else {
+        console.warn("applyMedication method not found on physiologicalModel");
+      }
+    } catch (error) {
+      console.error("Error applying medication:", error);
     }
   };
   
@@ -474,28 +560,39 @@ const IntegratedPatientSimulator = () => {
   const handlePerformIntervention = (intervention) => {
     if (!physiologicalModelRef.current || !isOperating) return;
     
-    let updatedState;
-    
-    switch (intervention) {
-      case 'intubate':
-        updatedState = physiologicalModelRef.current.intubate(true);
-        break;
-      case 'start_cpr':
-        updatedState = physiologicalModelRef.current.startCPR();
-        setIsCPRInProgress(true);
-        break;
-      case 'stop_cpr':
-        updatedState = physiologicalModelRef.current.stopCPR();
-        setIsCPRInProgress(false);
-        break;
-      default:
-        // Обрабатываем как сценарий
-        updatedState = physiologicalModelRef.current.applyScenario(intervention);
-        break;
-    }
-    
-    if (updatedState) {
-      setPatientState(updatedState);
+    try {
+      let updatedState;
+      
+      switch (intervention) {
+        case 'intubate':
+          if (typeof physiologicalModelRef.current.intubate === 'function') {
+            updatedState = physiologicalModelRef.current.intubate(true);
+          }
+          break;
+        case 'start_cpr':
+          if (typeof physiologicalModelRef.current.startCPR === 'function') {
+            updatedState = physiologicalModelRef.current.startCPR();
+            setIsCPRInProgress(true);
+          }
+          break;
+        case 'stop_cpr':
+          if (typeof physiologicalModelRef.current.stopCPR === 'function') {
+            updatedState = physiologicalModelRef.current.stopCPR();
+            setIsCPRInProgress(false);
+          }
+          break;
+        default:
+          if (typeof physiologicalModelRef.current.applyScenario === 'function') {
+            updatedState = physiologicalModelRef.current.applyScenario(intervention);
+          }
+          break;
+      }
+      
+      if (updatedState) {
+        setPatientState(updatedState);
+      }
+    } catch (error) {
+      console.error(`Error performing intervention ${intervention}:`, error);
     }
   };
   
@@ -638,134 +735,169 @@ const IntegratedPatientSimulator = () => {
     );
   };
 
+  // Функция для отображения сообщений об ошибках
+  const renderSimulationError = () => {
+    if (!simulationError) return null;
+    
+    return (
+      <div className="fixed bottom-4 right-4 bg-red-800 text-white px-4 py-3 rounded-lg shadow-lg max-w-md">
+        <div className="flex items-start">
+          <div className="flex-shrink-0">
+            <svg className="h-6 w-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div className="ml-3">
+            <p className="font-medium">{simulationError}</p>
+            <p className="mt-2 text-sm">Проверьте консоль разработчика для дополнительной информации</p>
+          </div>
+          <div className="ml-auto">
+            <button
+              onClick={() => setSimulationError(null)}
+              className="text-white hover:text-gray-300"
+            >
+              <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Основной интерфейс симулятора
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-white">
+    <div 
+      ref={appRef} 
+      className={`flex flex-col bg-black text-white ${
+        isFullscreen ? 'fixed inset-0 w-screen h-screen' : 'h-screen'
+      } overflow-hidden`}
+    >
       {/* Верхняя панель */}
-      <div className="h-12 bg-gray-900 border-b border-gray-700 flex justify-between items-center px-4">
-        <div className="flex space-x-4 items-center">
-          <h1 className="text-xl font-bold text-blue-400">Медицинский Симулятор</h1>
+      <div className="h-12 bg-gray-900 border-b border-gray-700 flex items-center px-4">
+        <div className="flex-1 flex items-center">
+          {/* Название */}
+          <h1 className="text-xl font-bold text-blue-400 mr-4">Медицинский Симулятор</h1>
+          
+          {/* Вкладки */}
+          <div className="flex space-x-1">
+            <button
+              className={`px-3 py-1 rounded-t ${activeTab === 'monitor' ? 'bg-blue-800 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+              onClick={() => setActiveTab('monitor')}
+            >
+              Монитор
+            </button>
+            <button
+              className={`px-3 py-1 rounded-t ${activeTab === 'ventilator' ? 'bg-blue-800 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+              onClick={() => setActiveTab('ventilator')}
+            >
+              ИВЛ
+            </button>
+            <button
+              className={`px-3 py-1 rounded-t ${activeTab === 'lab' ? 'bg-blue-800 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+              onClick={() => setActiveTab('lab')}
+            >
+              Лабораторные данные
+            </button>
+            <button
+              className={`px-3 py-1 rounded-t ${activeTab === 'records' ? 'bg-blue-800 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+              onClick={() => setActiveTab('records')}
+            >
+              Записи
+            </button>
+          </div>
+        </div>
+        
+        {/* Кнопки и статус */}
+        <div className="flex items-center space-x-2">
           <button
-            className={`px-4 py-1 rounded text-sm ${isOperating ? 'bg-red-800' : 'bg-green-800'}`}
+            className={`px-3 py-1 rounded text-sm ${isOperating ? 'bg-red-800 hover:bg-red-700' : 'bg-green-800 hover:bg-green-700'}`}
             onClick={() => setIsOperating(!isOperating)}
           >
-            {isOperating ? 'Завершить операцию' : 'Начало операции'}
+            {isOperating ? 'Завершить' : 'Начать'}
           </button>
           
-          {/* Добавляем кнопку для обучающего модуля */}
           <button
-            className="px-4 py-1 rounded text-sm bg-blue-800"
+            className="px-3 py-1 rounded text-sm bg-blue-800 hover:bg-blue-700"
             onClick={() => setShowEducationalModule(true)}
           >
             Обучение
           </button>
-        </div>
-        
-        <div className="flex items-center space-x-6">
+          
+          <button
+            className="px-3 py-1 rounded text-sm bg-blue-800 hover:bg-blue-700"
+            onClick={() => setShowPatientControl(true)}
+          >
+            Параметры
+          </button>
+          
+          <button
+            className="px-3 py-1 rounded text-sm bg-blue-800 hover:bg-blue-700"
+            onClick={toggleFullscreen}
+          >
+            {isFullscreen ? 'Выйти' : 'Полный экран'}
+          </button>
+          
           {patientState.intubated && (
-            <div className="px-2 py-1 bg-blue-900 text-sm rounded">
+            <div className="px-2 py-1 bg-blue-900 text-xs rounded">
               Интубирован
             </div>
           )}
           {isCPRInProgress && (
-            <div className="px-2 py-1 bg-red-900 text-sm rounded animate-pulse">
-              СЛР в процессе
+            <div className="px-2 py-1 bg-red-900 text-xs rounded animate-pulse">
+              СЛР
             </div>
           )}
           {renderPatientStatus()}
-          <div className="text-gray-300">{formattedDateTime}</div>
+          <div className="text-gray-300 text-sm">{formattedDateTime}</div>
         </div>
-      </div>
-      
-      {/* Информация о пациенте */}
-      <div className="bg-gray-900 border-b border-gray-700 h-10 px-4 flex justify-between items-center">
-        <div className="flex items-center space-x-4">
-          <div className="text-sm">
-            <span className="font-medium text-blue-400">{patientInfo.name}</span> | 
-            <span className="ml-1">{patientInfo.age} лет, {patientInfo.gender}</span> | 
-            <span className="ml-1">{patientInfo.weight} кг, {patientInfo.height} см</span> | 
-            <span className="ml-1">ID: {patientInfo.id}</span>
-          </div>
-        </div>
-        
-        <div className="flex items-center space-x-4">
-          <button 
-            onClick={() => setShowPatientControl(true)}
-            className="px-3 py-1 bg-blue-800 text-white rounded hover:bg-blue-700 text-sm"
-          >
-            Параметры пациента
-          </button>
-          <div className="text-sm">
-            <span className="text-gray-400">Диагноз:</span>
-            <span className="ml-1 text-white">{patientInfo.diagnosis}</span>
-          </div>
-        </div>
-      </div>
-      
-      {/* Вкладки */}
-      <div className="px-4 pt-2 bg-gray-900 border-b border-gray-700 flex space-x-2">
-        <TabButton 
-          label="Монитор" 
-          icon="📊"
-          isActive={activeTab === 'monitor'} 
-          onClick={() => setActiveTab('monitor')} 
-        />
-        <TabButton 
-          label="ИВЛ" 
-          icon="🫁"
-          isActive={activeTab === 'ventilator'} 
-          onClick={() => setActiveTab('ventilator')} 
-        />
-        <TabButton 
-          label="Лабораторные данные" 
-          icon="🧪"
-          isActive={activeTab === 'lab'} 
-          onClick={() => setActiveTab('lab')} 
-        />
-        <TabButton 
-          label="Записи" 
-          icon="📋"
-          isActive={activeTab === 'records'} 
-          onClick={() => setActiveTab('records')} 
-        />
       </div>
       
       {/* Основное содержимое */}
-      <div className="flex-1 p-4 overflow-auto">
+      <div className="flex-1 overflow-hidden">
         {activeTab === 'monitor' && (
-          <EnhancedPatientMonitor
-            patientState={patientState}
-            updatePatientState={updatePatientState}
-            isOperating={isOperating}
-            onApplyMedication={handleApplyMedication}
-            onPerformIntervention={handlePerformIntervention}
-            onLoadScenarios={() => setShowScenarios(true)}
-            isCPRInProgress={isCPRInProgress}
-          />
+          <div className="h-full p-1">
+            <EnhancedPatientMonitor
+              patientState={patientState}
+              updatePatientState={updatePatientState}
+              isOperating={isOperating}
+              onApplyMedication={handleApplyMedication}
+              onPerformIntervention={handlePerformIntervention}
+              onLoadScenarios={() => setShowScenarios(true)}
+              isCPRInProgress={isCPRInProgress}
+              className="h-full"
+            />
+          </div>
         )}
         
         {activeTab === 'ventilator' && (
-          <VentilatorMonitor
-            isOperating={isOperating}
-            patientData={patientState}
-            onVentilatorChange={(settings) => {
-              console.log("Ventilator settings changed:", settings);
-              // В реальном приложении обновляли бы состояние пациента
-            }}
-          />
+          <div className="h-full p-1 overflow-auto">
+            <VentilatorMonitor
+              isOperating={isOperating}
+              patientData={patientState}
+              onVentilatorChange={(settings) => {
+                console.log("Ventilator settings changed:", settings);
+              }}
+            />
+          </div>
         )}
         
         {activeTab === 'lab' && (
-          <LabResultsModule
-            patientData={patientState}
-          />
+          <div className="h-full p-1 overflow-auto">
+            <LabResultsModule
+              patientData={patientState}
+            />
+          </div>
         )}
         
         {activeTab === 'records' && (
-          <PatientRecords
-            patientInfo={patientInfo}
-            isOperating={isOperating}
-          />
+          <div className="h-full p-1 overflow-auto">
+            <PatientRecords
+              patientInfo={patientInfo}
+              isOperating={isOperating}
+            />
+          </div>
         )}
       </div>
       
@@ -773,6 +905,7 @@ const IntegratedPatientSimulator = () => {
       {renderPatientControlPanel()}
       {renderScenariosPanel()}
       {renderEducationalModule()}
+      {renderSimulationError()}
     </div>
   );
 };
